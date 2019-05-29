@@ -38,8 +38,13 @@
 #include "T3D/gameBase/gameConnection.h"
 #include "math/mathUtils.h"
 
+#include "T3D/components/render/renderComponentInterface.h"
+#include "T3D/systems/render/meshRenderSystem.h"
+
 // For player object bounds workaround.
 #include "T3D/player.h"
+
+#include "postFx/postEffectManager.h"
 
 extern bool gEditingMission;
 
@@ -106,17 +111,17 @@ SceneManager* gServerSceneGraph = NULL;
 //-----------------------------------------------------------------------------
 
 SceneManager::SceneManager( bool isClient )
-   : mLightManager( NULL ),
-     mCurrentRenderState( NULL ),
-     mIsClient( isClient ),
+   : mIsClient( isClient ),
+     mZoneManager( NULL ),
      mUsePostEffectFog( true ),
      mDisplayTargetResolution( 0, 0 ),
-     mDefaultRenderPass( NULL ),
+     mCurrentRenderState( NULL ),
      mVisibleDistance( 500.f ),
      mVisibleGhostDistance( 0 ),
      mNearClip( 0.1f ),
-     mAmbientLightColor( ColorF( 0.1f, 0.1f, 0.1f, 1.0f ) ),
-     mZoneManager( NULL )
+     mLightManager( NULL ),
+     mAmbientLightColor( LinearColorF( 0.1f, 0.1f, 0.1f, 1.0f ) ),
+     mDefaultRenderPass( NULL )
 {
    VECTOR_SET_ASSOCIATION( mBatchQueryList );
 
@@ -209,7 +214,7 @@ void SceneManager::renderScene( SceneRenderState* renderState, U32 objectMask, S
          AssertFatal( baseObject != NULL, "SceneManager::renderScene - findZone() did not return an object" );
       }
 
-      ColorF zoneAmbient;
+      LinearColorF zoneAmbient;
       if( baseObject && baseObject->getZoneAmbientLightColor( baseZone, zoneAmbient ) )
          mAmbientLightColor.setTargetValue( zoneAmbient );
       else
@@ -239,9 +244,11 @@ void SceneManager::renderScene( SceneRenderState* renderState, U32 objectMask, S
       MatrixF originalWorld = GFX->getWorldMatrix();
       Frustum originalFrustum = GFX->getFrustum();
 
-      Point2F projOffset = GFX->getCurrentProjectionOffset();
-      const FovPort *currentFovPort = GFX->getSteroFovPort();
-      const MatrixF *eyeTransforms = GFX->getStereoEyeTransforms();
+      // Save PFX & SceneManager projections
+      MatrixF origNonClipProjection = renderState->getSceneManager()->getNonClipProjection();
+      PFXFrameState origPFXState = PFXMGR->getFrameState();
+
+      const FovPort *currentFovPort = GFX->getStereoFovPort();
       const MatrixF *worldEyeTransforms = GFX->getInverseStereoEyeTransforms();
 
       // Render left half of display
@@ -251,15 +258,16 @@ void SceneManager::renderScene( SceneRenderState* renderState, U32 objectMask, S
       GFX->setWorldMatrix(worldEyeTransforms[0]);
 
       Frustum gfxFrustum = originalFrustum;
-      MathUtils::makeFovPortFrustum(&gfxFrustum, gfxFrustum.isOrtho(), gfxFrustum.getNearDist(), gfxFrustum.getFarDist(), currentFovPort[0], eyeTransforms[0]);
+      MathUtils::makeFovPortFrustum(&gfxFrustum, gfxFrustum.isOrtho(), gfxFrustum.getNearDist(), gfxFrustum.getFarDist(), currentFovPort[0]);
       GFX->setFrustum(gfxFrustum);
 
       SceneCameraState cameraStateLeft = SceneCameraState::fromGFX();
       SceneRenderState renderStateLeft( this, renderState->getScenePassType(), cameraStateLeft );
+      renderStateLeft.getSceneManager()->setNonClipProjection(GFX->getProjectionMatrix());
       renderStateLeft.setSceneRenderStyle(SRS_SideBySide);
-      renderStateLeft.setSceneRenderField(0);
+      PFXMGR->setFrameMatrices(GFX->getWorldMatrix(), GFX->getProjectionMatrix());
 
-      renderSceneNoLights( &renderStateLeft, objectMask, baseObject, baseZone );
+      renderSceneNoLights( &renderStateLeft, objectMask, baseObject, baseZone ); // left
 
       // Indicate that we've just finished a field
       //GFX->clear(GFXClearTarget | GFXClearZBuffer | GFXClearStencil, ColorI(255,0,0), 1.0f, 0);
@@ -271,21 +279,25 @@ void SceneManager::renderScene( SceneRenderState* renderState, U32 objectMask, S
       GFX->setWorldMatrix(worldEyeTransforms[1]);
 
       gfxFrustum = originalFrustum;
-      MathUtils::makeFovPortFrustum(&gfxFrustum, gfxFrustum.isOrtho(), gfxFrustum.getNearDist(), gfxFrustum.getFarDist(), currentFovPort[1], eyeTransforms[1]);
+      MathUtils::makeFovPortFrustum(&gfxFrustum, gfxFrustum.isOrtho(), gfxFrustum.getNearDist(), gfxFrustum.getFarDist(), currentFovPort[1]);
       GFX->setFrustum(gfxFrustum);
 
       SceneCameraState cameraStateRight = SceneCameraState::fromGFX();
       SceneRenderState renderStateRight( this, renderState->getScenePassType(), cameraStateRight );
+      renderStateRight.getSceneManager()->setNonClipProjection(GFX->getProjectionMatrix());
       renderStateRight.setSceneRenderStyle(SRS_SideBySide);
-      renderStateRight.setSceneRenderField(1);
+      PFXMGR->setFrameMatrices(GFX->getWorldMatrix(), GFX->getProjectionMatrix());
 
-      renderSceneNoLights( &renderStateRight, objectMask, baseObject, baseZone );
+      renderSceneNoLights( &renderStateRight, objectMask, baseObject, baseZone ); // right
 
       // Indicate that we've just finished a field
       //GFX->clear(GFXClearTarget | GFXClearZBuffer | GFXClearStencil, ColorI(0,255,0), 1.0f, 0);
       GFX->endField();
 
       // Restore previous values
+      renderState->getSceneManager()->setNonClipProjection(origNonClipProjection);
+      PFXMGR->setFrameState(origPFXState);
+
       GFX->setWorldMatrix(originalWorld);
       GFX->setFrustum(originalFrustum);
       GFX->setViewport(originalVP);
@@ -348,6 +360,8 @@ void SceneManager::_renderScene( SceneRenderState* state, U32 objectMask, SceneZ
 
    if( gEditingMission && state->isDiffusePass() )
       objectMask = EDITOR_RENDER_TYPEMASK;
+
+   MeshRenderSystem::render(this, state);
 
    // Update the zoning state and traverse zones.
 
@@ -450,6 +464,13 @@ void SceneManager::_renderScene( SceneRenderState* state, U32 objectMask, SceneZ
    }
 
    PROFILE_END();
+
+   //store our rendered objects into a list we can easily look up against later if required
+   mRenderedObjectsList.clear();
+   for (U32 i = 0; i < numRenderObjects; ++i)
+   {
+      mRenderedObjectsList.push_back(mBatchQueryList[i]);
+   }
 
    // Render the remaining objects.
 
@@ -699,7 +720,7 @@ RenderPassManager* SceneManager::getDefaultRenderPass() const
 
 //-----------------------------------------------------------------------------
 
-DefineConsoleFunction( sceneDumpZoneStates, void, ( bool updateFirst ), ( true ),
+DefineEngineFunction( sceneDumpZoneStates, void, ( bool updateFirst ), ( true ),
    "Dump the current zoning states of all zone spaces in the scene to the console.\n\n"
    "@param updateFirst If true, zoning states are brought up to date first; if false, the zoning states "
    "are dumped as is.\n\n"
@@ -724,7 +745,7 @@ DefineConsoleFunction( sceneDumpZoneStates, void, ( bool updateFirst ), ( true )
 
 //-----------------------------------------------------------------------------
 
-DefineConsoleFunction( sceneGetZoneOwner, SceneObject*, ( U32 zoneId ), ( true ),
+DefineEngineFunction( sceneGetZoneOwner, SceneObject*, ( U32 zoneId ),,
    "Return the SceneObject that contains the given zone.\n\n"
    "@param zoneId ID of zone.\n"
    "@return A SceneObject or NULL if the given @a zoneId is invalid.\n\n"

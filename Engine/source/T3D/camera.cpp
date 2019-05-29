@@ -393,44 +393,6 @@ void Camera::getEyeCameraTransform(IDisplayDevice *displayDevice, U32 eyeId, Mat
    }
 }
 
-DisplayPose Camera::calcCameraDeltaPose(GameConnection *con, DisplayPose inPose)
-{
-   // NOTE: this is intended to be similar to updateMove
-   DisplayPose outPose;
-   outPose.orientation = EulerF(0,0,0);
-   outPose.position = inPose.position;
-
-   // Pitch
-   outPose.orientation.x = (inPose.orientation.x - mLastAbsolutePitch);
-
-   // Constrain the range of mRot.x
-   while (outPose.orientation.x  < -M_PI_F) 
-      outPose.orientation.x += M_2PI_F;
-   while (outPose.orientation.x  > M_PI_F) 
-      outPose.orientation.x -= M_2PI_F;
-
-   // Yaw
-   outPose.orientation.z = (inPose.orientation.z - mLastAbsoluteYaw);
-
-   // Constrain the range of mRot.z
-   while (outPose.orientation.z < -M_PI_F) 
-      outPose.orientation.z += M_2PI_F;
-   while (outPose.orientation.z > M_PI_F) 
-      outPose.orientation.z -= M_2PI_F;
-
-   // Bank
-   if (mDataBlock->cameraCanBank)
-   {
-      outPose.orientation.y = (inPose.orientation.y - mLastAbsoluteRoll);
-   }
-
-   // Constrain the range of mRot.y
-   while (outPose.orientation.y > M_PI_F) 
-      outPose.orientation.y -= M_2PI_F;
-
-   return outPose;
-}
-
 //----------------------------------------------------------------------------
 
 F32 Camera::getCameraFov()
@@ -495,13 +457,6 @@ void Camera::processTick(const Move* move)
 
    if ( isMounted() )
    {
-      // Fetch Mount Transform.
-      MatrixF mat;
-      mMount.object->getMountTransform( mMount.node, mMount.xfm, &mat );
-
-      // Apply.
-      setTransform( mat );
-
       // Update SceneContainer.
       updateContainer();
       return;
@@ -617,7 +572,7 @@ void Camera::processTick(const Move* move)
          // process input/determine rotation vector
          if(virtualMode != StationaryMode &&
             virtualMode != TrackObjectMode &&
-            (!mLocked || virtualMode != OrbitObjectMode && virtualMode != OrbitPointMode))
+            (!mLocked || ((virtualMode != OrbitObjectMode) && (virtualMode != OrbitPointMode))))
          {
             if(!strafeMode)
             {
@@ -868,16 +823,7 @@ void Camera::interpolateTick(F32 dt)
    Parent::interpolateTick(dt);
 
    if ( isMounted() )
-   {
-      // Fetch Mount Transform.
-      MatrixF mat;
-      mMount.object->getRenderMountTransform( dt, mMount.node, mMount.xfm, &mat );
-
-      // Apply.
-      setRenderTransform( mat );
-
       return;
-   }
 
    Point3F rot = mDelta.rot + mDelta.rotVec * dt;
 
@@ -1329,6 +1275,7 @@ void Camera::unpackUpdate(NetConnection *con, BitStream *bstream)
       bstream->read(&pos.z);
       bstream->read(&rot.x);
       bstream->read(&rot.z);
+      rot.y = 0.0f;
       _setPosition(pos,rot);
 
       // NewtonMode
@@ -1405,7 +1352,7 @@ void Camera::consoleInit()
    // ExtendedMove support
    Con::addVariable("$camera::extendedMovePosRotIndex", TypeS32, &smExtendedMovePosRotIndex, 
       "@brief The ExtendedMove position/rotation index used for camera movements.\n\n"
-	   "@ingroup BaseCamera\n");
+      "@ingroup BaseCamera\n");
 }
 
 //-----------------------------------------------------------------------------

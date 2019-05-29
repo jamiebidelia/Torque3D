@@ -219,6 +219,12 @@ public:
       /// The device has started rendering a frame's field (such as for side-by-side rendering)
       deStartOfField,
 
+     /// left stereo frame has been rendered
+     deLeftStereoFrameRendered,
+
+     /// right stereo frame has been rendered
+     deRightStereoFrameRendered,
+
       /// The device is about to finish rendering a frame's field
       deEndOfField,
    };
@@ -248,6 +254,7 @@ public:
    {
       RS_Standard          = 0,
       RS_StereoSideBySide  = (1<<0),     // Render into current Render Target side-by-side
+     RS_StereoSeparate    = (1<<1)      // Render in two separate passes (then combined by vr compositor)
    };
 
    enum GFXDeviceLimits
@@ -281,13 +288,19 @@ protected:
    /// The style of rendering that is to be performed, based on GFXDeviceRenderStyles
    U32 mCurrentRenderStyle;
 
-   /// The current projection offset.  May be used during side-by-side rendering, for example.
-   Point2F mCurrentProjectionOffset;
+   /// Current stereo target being rendered to
+   S32 mCurrentStereoTarget;
 
    /// Eye offset used when using a stereo rendering style
    Point3F mStereoEyeOffset[NumStereoPorts];
 
+   /// Center matrix for head
+   MatrixF mStereoHeadTransform;
+
+   /// Left and right matrix for eyes
    MatrixF mStereoEyeTransforms[NumStereoPorts];
+
+   /// Inverse of mStereoEyeTransforms
    MatrixF mInverseStereoEyeTransforms[NumStereoPorts];
 
    /// Fov port settings
@@ -302,6 +315,7 @@ protected:
    /// This will allow querying to see if a device is initialized and ready to
    /// have operations performed on it.
    bool mInitialized;
+   bool mReset;
 
    /// This is called before this, or any other device, is deleted in the global destroy()
    /// method. It allows the device to clean up anything while everything is still valid.
@@ -326,6 +340,10 @@ public:
    /// @see endScene
    bool canCurrentlyRender() const { return mCanCurrentlyRender; }
 
+   bool recentlyReset(){ return mReset; }
+   void beginReset(){ mReset = true; }
+   void finalizeReset(){ mReset = false; }
+
    void setAllowRender( bool render ) { mAllowRender = render; }
 
    inline bool allowRender() const { return mAllowRender; }
@@ -333,20 +351,24 @@ public:
    /// Retrieve the current rendering style based on GFXDeviceRenderStyles
    U32 getCurrentRenderStyle() const { return mCurrentRenderStyle; }
 
+   /// Retrieve the current stereo target being rendered to
+   S32 getCurrentStereoTarget() const { return mCurrentStereoTarget; }
+
    /// Set the current rendering style, based on GFXDeviceRenderStyles
    void setCurrentRenderStyle(U32 style) { mCurrentRenderStyle = style; }
 
-   /// Set the current projection offset used during stereo rendering
-   const Point2F& getCurrentProjectionOffset() { return mCurrentProjectionOffset; }
-
-   /// Get the current projection offset used during stereo rendering
-   void setCurrentProjectionOffset(const Point2F& offset) { mCurrentProjectionOffset = offset; }
+   /// Set the current stereo target being rendered to (in case we're doing anything with postfx)
+   void setCurrentStereoTarget(const F32 targetId) { mCurrentStereoTarget = targetId; }
 
    /// Get the current eye offset used during stereo rendering
    const Point3F* getStereoEyeOffsets() { return mStereoEyeOffset; }
 
+   const MatrixF& getStereoHeadTransform() { return mStereoHeadTransform;  }
    const MatrixF* getStereoEyeTransforms() { return mStereoEyeTransforms; }
    const MatrixF* getInverseStereoEyeTransforms() { return mInverseStereoEyeTransforms; }
+
+   /// Sets the head matrix for stereo rendering
+   void setStereoHeadTransform(const MatrixF &mat) { mStereoHeadTransform = mat; }
 
    /// Set the current eye offset used during stereo rendering
    void setStereoEyeOffsets(Point3F *offsets) { dMemcpy(mStereoEyeOffset, offsets, sizeof(Point3F) * NumStereoPorts); }
@@ -354,10 +376,10 @@ public:
    void setStereoEyeTransforms(MatrixF *transforms) { dMemcpy(mStereoEyeTransforms, transforms, sizeof(mStereoEyeTransforms)); dMemcpy(mInverseStereoEyeTransforms, transforms, sizeof(mInverseStereoEyeTransforms)); mInverseStereoEyeTransforms[0].inverse(); mInverseStereoEyeTransforms[1].inverse();  }
 
    /// Set the current eye offset used during stereo rendering. Assumes NumStereoPorts are available.
-   void setFovPort(const FovPort *ports) { dMemcpy(mFovPorts, ports, sizeof(mFovPorts)); }
+   void setStereoFovPort(const FovPort *ports) { dMemcpy(mFovPorts, ports, sizeof(mFovPorts)); }
 
    /// Get the current eye offset used during stereo rendering
-   const FovPort* getSteroFovPort() { return mFovPorts; }
+   const FovPort* getStereoFovPort() { return mFovPorts; }
 
    /// Sets stereo viewports
    void setSteroViewports(const RectI *ports) { dMemcpy(mStereoViewports, ports, sizeof(RectI) * NumStereoPorts); }
@@ -386,6 +408,8 @@ public:
          }
          setViewport(mStereoViewports[eyeId]);
       }
+
+      mCurrentStereoTarget = eyeId;
    }
 
    GFXCardProfiler* getCardProfiler() const { return mCardProfiler; }
@@ -457,7 +481,7 @@ public:
    /// Returns the first format from the list which meets all 
    /// the criteria of the texture profile and query options.      
    virtual GFXFormat selectSupportedFormat(GFXTextureProfile *profile,
-	   const Vector<GFXFormat> &formats, bool texture, bool mustblend, bool mustfilter) = 0;
+      const Vector<GFXFormat> &formats, bool texture, bool mustblend, bool mustfilter) = 0;
 
    /// @}
 
@@ -519,7 +543,7 @@ protected:
    bool          mLightDirty[LIGHT_STAGE_COUNT];
    bool          mLightsDirty;
 
-   ColorF        mGlobalAmbientColor;
+   LinearColorF        mGlobalAmbientColor;
    bool          mGlobalAmbientColorDirty;
 
    /// @}
@@ -591,7 +615,7 @@ protected:
    virtual void setTextureInternal(U32 textureUnit, const GFXTextureObject*texture) = 0;
 
    virtual void setLightInternal(U32 lightStage, const GFXLightInfo light, bool lightEnable) = 0;
-   virtual void setGlobalAmbientInternal(ColorF color) = 0;
+   virtual void setGlobalAmbientInternal(LinearColorF color) = 0;
    virtual void setLightMaterialInternal(const GFXLightMaterial mat) = 0;
 
    virtual bool beginSceneInternal() = 0;
@@ -637,7 +661,8 @@ protected:
    virtual GFXVertexBuffer *allocVertexBuffer(  U32 numVerts, 
                                                 const GFXVertexFormat *vertexFormat, 
                                                 U32 vertSize, 
-                                                GFXBufferType bufferType ) = 0;
+                                                GFXBufferType bufferType,
+                                                void* data = NULL ) = 0;
 
    /// Called from GFXVertexFormat to allocate the hardware 
    /// specific vertex declaration for rendering.
@@ -674,7 +699,8 @@ protected:
    /// @note All index buffers use unsigned 16-bit indices.
    virtual GFXPrimitiveBuffer *allocPrimitiveBuffer(  U32 numIndices, 
                                                       U32 numPrimitives, 
-                                                      GFXBufferType bufferType ) = 0;
+                                                      GFXBufferType bufferType,
+                                                      void* data = NULL ) = 0;
 
    /// @}
 
@@ -801,7 +827,7 @@ public:
    /// @{
 
    ///
-   virtual void clear( U32 flags, ColorI color, F32 z, U32 stencil ) = 0;
+   virtual void clear( U32 flags, const LinearColorF& color, F32 z, U32 stencil ) = 0;
    virtual bool beginScene();
    virtual void endScene();
    virtual void beginField();
@@ -901,8 +927,8 @@ public:
    /// because of the state caching stuff.
    /// @{
    void setLight(U32 stage, GFXLightInfo* light);
-   void setLightMaterial(GFXLightMaterial mat);
-   void setGlobalAmbientColor(ColorF color);
+   void setLightMaterial(const GFXLightMaterial& mat);
+   void setGlobalAmbientColor(const LinearColorF& color);
 
    /// @}
    
@@ -941,6 +967,7 @@ public:
    /// @{
    /// Sets the dirty Render/Texture/Sampler states from the caching system
    void updateStates(bool forceSetAll = false);
+   void clearTextureStateImmediate(U32 stage);
 
    /// Returns the forced global wireframe state.
    static bool getWireframe() { return smWireframe; }

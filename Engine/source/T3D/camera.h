@@ -20,6 +20,11 @@
 // IN THE SOFTWARE.
 //-----------------------------------------------------------------------------
 
+//~~~~~~~~~~~~~~~~~~~~//~~~~~~~~~~~~~~~~~~~~//~~~~~~~~~~~~~~~~~~~~//~~~~~~~~~~~~~~~~~~~~~//
+// Arcane-FX for MIT Licensed Open Source version of Torque 3D from GarageGames
+// Copyright (C) 2015 Faust Logic, Inc.
+//~~~~~~~~~~~~~~~~~~~~//~~~~~~~~~~~~~~~~~~~~//~~~~~~~~~~~~~~~~~~~~//~~~~~~~~~~~~~~~~~~~~~//
+
 #ifndef _CAMERA_H_
 #define _CAMERA_H_
 
@@ -237,7 +242,6 @@ class Camera: public ShapeBase
       virtual void interpolateTick( F32 delta);
       virtual void getCameraTransform( F32* pos,MatrixF* mat );
       virtual void getEyeCameraTransform( IDisplayDevice *display, U32 eyeId, MatrixF *outMat );
-      virtual DisplayPose calcCameraDeltaPose(GameConnection *con, DisplayPose inPose);
 
       virtual void writePacketData( GameConnection* conn, BitStream* stream );
       virtual void readPacketData( GameConnection* conn, BitStream* stream );
@@ -247,6 +251,8 @@ class Camera: public ShapeBase
       DECLARE_CONOBJECT( Camera );
       DECLARE_CATEGORY( "Game" );
       DECLARE_DESCRIPTION( "Represents a position, direction and field of view to render a scene from." );
+      static F32 getMovementSpeed() { return smMovementSpeed; }
+      bool isCamera() const { return true; }
 };
 
 typedef Camera::CameraMotionMode CameraMotionMode;
